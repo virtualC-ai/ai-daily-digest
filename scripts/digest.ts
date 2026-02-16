@@ -6,13 +6,20 @@ import process from 'node:process';
 // Constants
 // ============================================================================
 
+// AI Provider Configuration - Using Cerebras GLM 4.7 as primary
+const CEREBRAS_API_URL = 'https://api.cerebras.ai/v1';
+const CEREBRAS_MODEL = 'zai-glm-4.7';
+const CEREBRAS_BATCH_SIZE = 10;
+const MAX_CONCURRENT_CEREBRAS = 2;
+
+// Fallback configuration (legacy support)
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 const OPENAI_DEFAULT_API_BASE = 'https://api.openai.com/v1';
 const OPENAI_DEFAULT_MODEL = 'gpt-4o-mini';
 const FEED_FETCH_TIMEOUT_MS = 15_000;
 const FEED_CONCURRENCY = 10;
-const GEMINI_BATCH_SIZE = 10;
-const MAX_CONCURRENT_GEMINI = 2;
+const AI_BATCH_SIZE = 10;
+const MAX_CONCURRENT_AI = 2;
 
 // 90 RSS feeds from Hacker News Popularity Contest 2025 (curated by Karpathy)
 const RSS_FEEDS: Array<{ name: string; xmlUrl: string; htmlUrl: string }> = [
@@ -446,16 +453,19 @@ function inferOpenAIModel(apiBase: string): string {
 }
 
 function createAIClient(config: {
+  cerebrasApiKey?: string;
   geminiApiKey?: string;
   openaiApiKey?: string;
   openaiApiBase?: string;
   openaiModel?: string;
 }): AIClient {
   const state = {
+    cerebrasApiKey: config.cerebrasApiKey?.trim() || '',
     geminiApiKey: config.geminiApiKey?.trim() || '',
     openaiApiKey: config.openaiApiKey?.trim() || '',
     openaiApiBase: (config.openaiApiBase?.trim() || OPENAI_DEFAULT_API_BASE).replace(/\/+$/, ''),
     openaiModel: config.openaiModel?.trim() || '',
+    cerebrasEnabled: Boolean(config.cerebrasApiKey?.trim()),
     geminiEnabled: Boolean(config.geminiApiKey?.trim()),
     fallbackLogged: false,
   };
@@ -466,6 +476,22 @@ function createAIClient(config: {
 
   return {
     async call(prompt: string): Promise<string> {
+      // Primary: Cerebras GLM 4.7
+      if (state.cerebrasEnabled && state.cerebrasApiKey) {
+        try {
+          return await callOpenAICompatible(prompt, state.cerebrasApiKey, CEREBRAS_API_URL, CEREBRAS_MODEL);
+        } catch (error) {
+          if (!state.fallbackLogged) {
+            const reason = error instanceof Error ? error.message : String(error);
+            console.warn(`[digest] Cerebras GLM failed, trying fallback. Reason: ${reason}`);
+            state.fallbackLogged = true;
+          }
+          state.cerebrasEnabled = false;
+          // Fall through to next option
+        }
+      }
+
+      // Fallback 1: Gemini
       if (state.geminiEnabled && state.geminiApiKey) {
         try {
           return await callGemini(prompt, state.geminiApiKey);
@@ -483,11 +509,12 @@ function createAIClient(config: {
         }
       }
 
+      // Fallback 2: OpenAI-compatible
       if (state.openaiApiKey) {
         return callOpenAICompatible(prompt, state.openaiApiKey, state.openaiApiBase, state.openaiModel);
       }
 
-      throw new Error('No AI API key configured. Set GEMINI_API_KEY and/or OPENAI_API_KEY.');
+      throw new Error('No AI API key configured. Set CEREBRAS_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.');
     },
   };
 }
@@ -578,16 +605,16 @@ async function scoreArticlesWithAI(
   }));
   
   const batches: typeof indexed[] = [];
-  for (let i = 0; i < indexed.length; i += GEMINI_BATCH_SIZE) {
-    batches.push(indexed.slice(i, i + GEMINI_BATCH_SIZE));
+  for (let i = 0; i < indexed.length; i += AI_BATCH_SIZE) {
+    batches.push(indexed.slice(i, i + AI_BATCH_SIZE));
   }
   
   console.log(`[digest] AI scoring: ${articles.length} articles in ${batches.length} batches`);
   
   const validCategories = new Set<string>(['ai-ml', 'security', 'engineering', 'tools', 'opinion', 'other']);
   
-  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_GEMINI) {
-    const batchGroup = batches.slice(i, i + MAX_CONCURRENT_GEMINI);
+  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_AI) {
+    const batchGroup = batches.slice(i, i + MAX_CONCURRENT_AI);
     const promises = batchGroup.map(async (batch) => {
       try {
         const prompt = buildScoringPrompt(batch);
@@ -616,7 +643,7 @@ async function scoreArticlesWithAI(
     });
     
     await Promise.all(promises);
-    console.log(`[digest] Scoring progress: ${Math.min(i + MAX_CONCURRENT_GEMINI, batches.length)}/${batches.length} batches`);
+    console.log(`[digest] Scoring progress: ${Math.min(i + MAX_CONCURRENT_AI, batches.length)}/${batches.length} batches`);
   }
   
   return allScores;
@@ -689,14 +716,14 @@ async function summarizeArticles(
   }));
   
   const batches: typeof indexed[] = [];
-  for (let i = 0; i < indexed.length; i += GEMINI_BATCH_SIZE) {
-    batches.push(indexed.slice(i, i + GEMINI_BATCH_SIZE));
+  for (let i = 0; i < indexed.length; i += AI_BATCH_SIZE) {
+    batches.push(indexed.slice(i, i + AI_BATCH_SIZE));
   }
   
   console.log(`[digest] Generating summaries for ${articles.length} articles in ${batches.length} batches`);
   
-  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_GEMINI) {
-    const batchGroup = batches.slice(i, i + MAX_CONCURRENT_GEMINI);
+  for (let i = 0; i < batches.length; i += MAX_CONCURRENT_AI) {
+    const batchGroup = batches.slice(i, i + MAX_CONCURRENT_AI);
     const promises = batchGroup.map(async (batch) => {
       try {
         const prompt = buildSummaryPrompt(batch, lang);
@@ -721,7 +748,7 @@ async function summarizeArticles(
     });
     
     await Promise.all(promises);
-    console.log(`[digest] Summary progress: ${Math.min(i + MAX_CONCURRENT_GEMINI, batches.length)}/${batches.length} batches`);
+    console.log(`[digest] Summary progress: ${Math.min(i + MAX_CONCURRENT_AI, batches.length)}/${batches.length} batches`);
   }
   
   return summaries;
@@ -1012,8 +1039,9 @@ Options:
   --help          Show this help
 
 Environment:
-  GEMINI_API_KEY   Optional but recommended. Get one at https://aistudio.google.com/apikey
-  OPENAI_API_KEY   Optional fallback key for OpenAI-compatible APIs
+  CEREBRAS_API_KEY Primary API key for Cerebras GLM 4.7 (recommended)
+  GEMINI_API_KEY   Optional fallback for Gemini
+  OPENAI_API_KEY   Optional fallback for OpenAI-compatible APIs
   OPENAI_API_BASE  Optional fallback base URL (default: https://api.openai.com/v1)
   OPENAI_MODEL     Optional fallback model (default: deepseek-chat for DeepSeek base, else gpt-4o-mini)
 
@@ -1046,18 +1074,21 @@ async function main(): Promise<void> {
     }
   }
   
+  const cerebrasApiKey = process.env.CEREBRAS_API_KEY;
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const openaiApiBase = process.env.OPENAI_API_BASE;
   const openaiModel = process.env.OPENAI_MODEL;
 
-  if (!geminiApiKey && !openaiApiKey) {
-    console.error('[digest] Error: Missing API key. Set GEMINI_API_KEY and/or OPENAI_API_KEY.');
+  if (!cerebrasApiKey && !geminiApiKey && !openaiApiKey) {
+    console.error('[digest] Error: Missing API key. Set CEREBRAS_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.');
+    console.error('[digest] Cerebras key: https://cloud.cerebras.ai/');
     console.error('[digest] Gemini key: https://aistudio.google.com/apikey');
     process.exit(1);
   }
 
   const aiClient = createAIClient({
+    cerebrasApiKey,
     geminiApiKey,
     openaiApiKey,
     openaiApiBase,
@@ -1074,8 +1105,11 @@ async function main(): Promise<void> {
   console.log(`[digest] Top N: ${topN}`);
   console.log(`[digest] Language: ${lang}`);
   console.log(`[digest] Output: ${outputPath}`);
-  console.log(`[digest] AI provider: ${geminiApiKey ? 'Gemini (primary)' : 'OpenAI-compatible (primary)'}`);
-  if (openaiApiKey) {
+  console.log(`[digest] AI provider: ${cerebrasApiKey ? 'Cerebras GLM 4.7 (primary)' : geminiApiKey ? 'Gemini (fallback)' : 'OpenAI-compatible (fallback)'}`);
+  if (cerebrasApiKey) {
+    console.log(`[digest] Primary: ${CEREBRAS_API_URL} (model=${CEREBRAS_MODEL})`);
+  }
+  if (geminiApiKey || openaiApiKey) {
     const resolvedBase = (openaiApiBase?.trim() || OPENAI_DEFAULT_API_BASE).replace(/\/+$/, '');
     const resolvedModel = openaiModel?.trim() || inferOpenAIModel(resolvedBase);
     console.log(`[digest] Fallback: ${resolvedBase} (model=${resolvedModel})`);

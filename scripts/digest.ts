@@ -73,10 +73,12 @@ const MAX_CONCURRENT_CEREBRAS = 2;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 const OPENAI_DEFAULT_API_BASE = 'https://api.openai.com/v1';
 const OPENAI_DEFAULT_MODEL = 'gpt-4o-mini';
-const FEED_FETCH_TIMEOUT_MS = 15_000;
-const FEED_CONCURRENCY = 10;
+// RPi-Optimized Configuration
+const FEED_CONCURRENCY = 5;        // Reduced from 10 for RPi network stability
+const FEED_FETCH_TIMEOUT_MS = 20_000;  // Increased from 15s for slower RPi network
 const AI_BATCH_SIZE = 10;
-const MAX_CONCURRENT_AI = 2;
+const MAX_CONCURRENT_AI = 2;       // Keep 2 for Cerebras API
+const MAX_RETRIES = 2;             // Add retry for flaky RPi network
 
 // 90 RSS feeds from Hacker News Popularity Contest 2025 (curated by Karpathy)
 const RSS_FEEDS: Array<{ name: string; xmlUrl: string; htmlUrl: string }> = [
@@ -355,49 +357,64 @@ function parseRSSItems(xml: string): Array<{ title: string; link: string; pubDat
 }
 
 // ============================================================================
-// Feed Fetching
+// Feed Fetching (with retry for RPi network stability)
 // ============================================================================
 
-async function fetchFeed(feed: { name: string; xmlUrl: string; htmlUrl: string }): Promise<Article[]> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS);
-    
-    const response = await fetch(feed.xmlUrl, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'AI-Daily-Digest/1.0 (RSS Reader)',
-        'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
-      },
-    });
-    
-    clearTimeout(timeout);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+async function fetchFeedWithRetry(
+  feed: { name: string; xmlUrl: string; htmlUrl: string },
+  retries = MAX_RETRIES
+): Promise<Article[]> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fetchFeedInternal(feed);
+      return result;
+    } catch (error) {
+      if (attempt === retries) {
+        // Final attempt failed
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes('abort')) {
+          console.warn(`[digest] ✗ ${feed.name}: ${msg} (failed after ${retries + 1} attempts)`);
+        } else {
+          console.warn(`[digest] ✗ ${feed.name}: timeout (failed after ${retries + 1} attempts)`);
+        }
+        return [];
+      }
+      // Wait before retry (exponential backoff)
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
     }
-    
-    const xml = await response.text();
-    const items = parseRSSItems(xml);
-    
-    return items.map(item => ({
-      title: item.title,
-      link: item.link,
-      pubDate: parseDate(item.pubDate) || new Date(0),
-      description: item.description,
-      sourceName: feed.name,
-      sourceUrl: feed.htmlUrl,
-    }));
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    // Only log non-abort errors to reduce noise
-    if (!msg.includes('abort')) {
-      console.warn(`[digest] ✗ ${feed.name}: ${msg}`);
-    } else {
-      console.warn(`[digest] ✗ ${feed.name}: timeout`);
-    }
-    return [];
   }
+  return [];
+}
+
+async function fetchFeedInternal(feed: { name: string; xmlUrl: string; htmlUrl: string }): Promise<Article[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS);
+  
+  const response = await fetch(feed.xmlUrl, {
+    signal: controller.signal,
+    headers: {
+      'User-Agent': 'AI-Daily-Digest/1.0 (RSS Reader)',
+      'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+    },
+  });
+  
+  clearTimeout(timeout);
+  
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  
+  const xml = await response.text();
+  const items = parseRSSItems(xml);
+  
+  return items.map(item => ({
+    title: item.title,
+    link: item.link,
+    pubDate: parseDate(item.pubDate) || new Date(0),
+    description: item.description,
+    sourceName: feed.name,
+    sourceUrl: feed.htmlUrl,
+  }));
 }
 
 async function fetchAllFeeds(feeds: typeof RSS_FEEDS): Promise<Article[]> {
@@ -405,9 +422,11 @@ async function fetchAllFeeds(feeds: typeof RSS_FEEDS): Promise<Article[]> {
   let successCount = 0;
   let failCount = 0;
   
+  console.log(`[digest] Fetching ${feeds.length} RSS feeds with ${FEED_CONCURRENCY} concurrency (RPi optimized)...`);
+  
   for (let i = 0; i < feeds.length; i += FEED_CONCURRENCY) {
     const batch = feeds.slice(i, i + FEED_CONCURRENCY);
-    const results = await Promise.allSettled(batch.map(fetchFeed));
+    const results = await Promise.allSettled(batch.map(fetchFeedWithRetry));
     
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value.length > 0) {

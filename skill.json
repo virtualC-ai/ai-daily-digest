@@ -1,0 +1,55 @@
+{
+  "name": "ai-daily-digest",
+  "version": "1.0.0",
+  "description": "AI驱动的技术博客日报生成工具（使用 Cerebras GLM 4.7）",
+  "author": "virtualC-ai (fork from vigorX777)",
+  "license": "MIT",
+  "tools": [
+    {
+      "name": "generate-digest",
+      "description": "生成 AI 技术日报",
+      "command": "bun scripts/digest.ts",
+      "env": {
+        "CEREBRAS_API_KEY": "{{credentials.cerebras.api_key}}",
+        "PATH": "{{env.PATH}}"
+      },
+      "args": [
+        {
+          "name": "hours",
+          "description": "时间范围（小时）",
+          "type": "number",
+          "default": 48
+        },
+        {
+          "name": "top-n",
+          "description": "精选文章数量",
+          "type": "number",
+          "default": 15
+        },
+        {
+          "name": "lang",
+          "description": "输出语言",
+          "type": "string",
+          "enum": ["zh", "en"],
+          "default": "zh"
+        },
+        {
+          "name": "output",
+          "description": "输出文件路径",
+          "type": "string",
+          "default": "./digest-{date}.md"
+        }
+      ]
+    }
+  ],
+  "credentials": {
+    "cerebras": {
+      "description": "Cerebras API Key",
+      "required": true,
+      "env": "CEREBRAS_API_KEY"
+    }
+  },
+  "hooks": {
+    "pre-execution": "scripts/setup-env.sh"
+  }
+}

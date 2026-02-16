@@ -1,6 +1,63 @@
-import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
+import { homedir } from 'node:os';
+
+// ============================================================================
+// Helper: Load API Keys from OpenClaw Config
+// ============================================================================
+
+interface OpenClawConfig {
+  auth?: {
+    profiles?: {
+      [key: string]: {
+        apiKey?: string;
+      };
+    };
+  };
+}
+
+async function loadApiKeyFromOpenClaw(): Promise<string | undefined> {
+  try {
+    const configPath = join(homedir(), '.openclaw', 'openclaw.json');
+    const configContent = await readFile(configPath, 'utf-8');
+    const config: OpenClawConfig = JSON.parse(configContent);
+    
+    // Try to get Cerebras API key from config
+    const cerebrasProfile = config.auth?.profiles?.['cerebras:default'];
+    if (cerebrasProfile?.apiKey) {
+      return cerebrasProfile.apiKey;
+    }
+    
+    // Fallback: check other providers
+    for (const [key, profile] of Object.entries(config.auth?.profiles || {})) {
+      if (key.includes('cerebras') && profile.apiKey) {
+        return profile.apiKey;
+      }
+    }
+  } catch {
+    // Config file doesn't exist or is invalid
+  }
+  return undefined;
+}
+
+async function loadApiKeyFromFile(path: string): Promise<string | undefined> {
+  try {
+    const content = await readFile(path, 'utf-8');
+    // Try JSON format
+    try {
+      const json = JSON.parse(content);
+      return json.cerebrasApiKey || json.apiKey;
+    } catch {
+      // Try env file format
+      const match = content.match(/^CEREBRAS_API_KEY=["']?([^"'\n]+)["']?$/m);
+      if (match) return match[1];
+    }
+  } catch {
+    // File doesn't exist
+  }
+  return undefined;
+}
 
 // ============================================================================
 // Constants
@@ -1074,7 +1131,26 @@ async function main(): Promise<void> {
     }
   }
   
-  const cerebrasApiKey = process.env.CEREBRAS_API_KEY;
+  // Try to load API key from multiple sources
+  let cerebrasApiKey = process.env.CEREBRAS_API_KEY;
+  
+  // If not in env, try OpenClaw config
+  if (!cerebrasApiKey) {
+    cerebrasApiKey = await loadApiKeyFromOpenClaw();
+    if (cerebrasApiKey) {
+      console.log('[digest] Loaded Cerebras API key from OpenClaw config');
+    }
+  }
+  
+  // If still not found, try config file
+  if (!cerebrasApiKey) {
+    cerebrasApiKey = await loadApiKeyFromFile(join(homedir(), '.ai-daily-digest', 'config.json'));
+    if (cerebrasApiKey) {
+      console.log('[digest] Loaded Cerebras API key from ~/.ai-daily-digest/config.json');
+    }
+  }
+  
+  // Fallback keys
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const openaiApiBase = process.env.OPENAI_API_BASE;

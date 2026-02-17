@@ -1,55 +1,67 @@
 {
   "name": "ai-daily-digest",
-  "version": "1.0.0",
-  "description": "AI驱动的技术博客日报生成工具（使用 Cerebras GLM 4.7）",
+  "version": "1.1.0",
+  "description": "AI驱动的技术博客日报生成工具 - 使用 Cerebras GLM 4.7 分析 90 个顶级技术博客",
   "author": "virtualC-ai (fork from vigorX777)",
   "license": "MIT",
+  "repository": "https://github.com/virtualC-ai/ai-daily-digest",
+  "entry": "./run.sh",
   "tools": [
     {
-      "name": "generate-digest",
+      "name": "digest",
       "description": "生成 AI 技术日报",
-      "command": "bun scripts/digest.ts",
-      "env": {
-        "CEREBRAS_API_KEY": "{{credentials.cerebras.api_key}}",
-        "PATH": "{{env.PATH}}"
-      },
+      "entry": "./run.sh",
       "args": [
         {
           "name": "hours",
           "description": "时间范围（小时）",
           "type": "number",
-          "default": 48
+          "default": 48,
+          "required": false
         },
         {
           "name": "top-n",
           "description": "精选文章数量",
           "type": "number",
-          "default": 15
+          "default": 15,
+          "required": false
         },
         {
           "name": "lang",
           "description": "输出语言",
           "type": "string",
           "enum": ["zh", "en"],
-          "default": "zh"
+          "default": "zh",
+          "required": false
         },
         {
           "name": "output",
           "description": "输出文件路径",
           "type": "string",
-          "default": "./digest-{date}.md"
+          "required": false
         }
       ]
     }
   ],
-  "credentials": {
-    "cerebras": {
-      "description": "Cerebras API Key",
-      "required": true,
-      "env": "CEREBRAS_API_KEY"
-    }
+  "dependencies": {
+    "runtime": "bun"
   },
-  "hooks": {
-    "pre-execution": "scripts/setup-env.sh"
-  }
+  "config": {
+    "apiKeySource": [
+      "~/.openclaw/agents/main/agent/auth-profiles.json",
+      "~/.ai-daily-digest/config.json",
+      "env:CEREBRAS_API_KEY"
+    ]
+  },
+  "triggers": [
+    {
+      "type": "command",
+      "patterns": ["/digest", "生成技术日报", "AI日报"]
+    },
+    {
+      "type": "cron",
+      "schedule": "30 9 * * *",
+      "timezone": "Asia/Hong_Kong"
+    }
+  ]
 }

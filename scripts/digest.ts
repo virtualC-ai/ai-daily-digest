@@ -7,37 +7,54 @@ import { homedir } from 'node:os';
 // Helper: Load API Keys from OpenClaw Config
 // ============================================================================
 
-interface OpenClawConfig {
-  auth?: {
-    profiles?: {
-      [key: string]: {
-        apiKey?: string;
-      };
+interface AuthProfilesConfig {
+  version: number;
+  profiles: {
+    [key: string]: {
+      type: string;
+      provider: string;
+      key?: string;
     };
   };
 }
 
 async function loadApiKeyFromOpenClaw(): Promise<string | undefined> {
   try {
+    // Try auth-profiles.json first (actual location of API keys)
+    const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+    const authContent = await readFile(authPath, 'utf-8');
+    const auth: AuthProfilesConfig = JSON.parse(authContent);
+    
+    // Get Cerebras API key from auth profiles
+    const cerebrasProfile = auth.profiles['cerebras:default'];
+    if (cerebrasProfile?.key) {
+      return cerebrasProfile.key;
+    }
+    
+    // Fallback: check other profiles
+    for (const [profileKey, profile] of Object.entries(auth.profiles)) {
+      if (profileKey.includes('cerebras') && profile.key) {
+        return profile.key;
+      }
+    }
+  } catch {
+    // auth-profiles.json doesn't exist or is invalid
+  }
+  
+  // Fallback: try openclaw.json (for backward compatibility)
+  try {
     const configPath = join(homedir(), '.openclaw', 'openclaw.json');
     const configContent = await readFile(configPath, 'utf-8');
     const config: OpenClawConfig = JSON.parse(configContent);
     
-    // Try to get Cerebras API key from config
     const cerebrasProfile = config.auth?.profiles?.['cerebras:default'];
     if (cerebrasProfile?.apiKey) {
       return cerebrasProfile.apiKey;
     }
-    
-    // Fallback: check other providers
-    for (const [key, profile] of Object.entries(config.auth?.profiles || {})) {
-      if (key.includes('cerebras') && profile.apiKey) {
-        return profile.apiKey;
-      }
-    }
   } catch {
     // Config file doesn't exist or is invalid
   }
+  
   return undefined;
 }
 

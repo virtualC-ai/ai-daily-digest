@@ -80,9 +80,9 @@ async function loadApiKeyFromFile(path: string): Promise<string | undefined> {
 // Constants
 // ============================================================================
 
-// AI Provider Configuration - Using Cerebras GLM 4.7 as primary
+// AI Provider Configuration - Using Cerebras Llama 3.1 as primary
 const CEREBRAS_API_URL = 'https://api.cerebras.ai/v1';
-const CEREBRAS_MODEL = 'zai-glm-4.7';
+const CEREBRAS_MODEL = 'llama3.1-8b';  // Changed from zai-glm-4.7 (access restricted)
 const CEREBRAS_BATCH_SIZE = 10;
 const MAX_CONCURRENT_CEREBRAS = 2;
 
